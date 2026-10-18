@@ -1,3 +1,4 @@
+import os
 from typing import Dict, Any
 import nltk
 from langchain_core.tools import tool
@@ -60,4 +61,52 @@ def make_tools(session):
         session.store_result("tokenize_tool", {}, summary)
         return summary
 
-    return [tokenize_tool]
+    @tool
+    def list_files_tool(subdirectory: str = "") -> Dict[str, Any]:
+        """Lists files and directories in the repository or a given subdirectory prior to loading data.
+
+        This tool is used before loading data to discover file paths and dataset locations in the workspace.
+        Filters out hidden files/folders (starting with '.') and Python cache folders ('__pycache__').
+
+        Args:
+            subdirectory (str): Subdirectory path relative to the root workspace (default is "").
+
+        Returns:
+            Dict[str, Any]: Dictionary containing result_id, subdirectory, directories, and files.
+        """
+        target_dir = os.path.normpath(subdirectory) if subdirectory else "."
+
+        if not os.path.exists(target_dir) or not os.path.isdir(target_dir):
+            return {"error": f"Directory '{subdirectory}' does not exist or is not a directory."}
+
+        try:
+            entries = os.listdir(target_dir)
+        except Exception as e:
+            return {"error": f"Failed to list directory contents: {str(e)}"}
+
+        files = []
+        directories = []
+
+        for entry in sorted(entries):
+            # Ignore hidden files/folders and __pycache__
+            if entry.startswith(".") or entry == "__pycache__":
+                continue
+
+            full_path = os.path.join(target_dir, entry)
+            if os.path.isdir(full_path):
+                directories.append(entry)
+            else:
+                files.append(entry)
+
+        result_id = session.next_result_id("list_files")
+        summary = {
+            "result_id": result_id,
+            "subdirectory": subdirectory,
+            "directories": directories,
+            "files": files,
+        }
+
+        session.store_result("list_files_tool", {"subdirectory": subdirectory}, summary)
+        return summary
+
+    return [tokenize_tool, list_files_tool]

@@ -52,3 +52,14 @@ def test_tokenize_tool_known_answer_10():
 
     unigrams = session.dataframe["unigrams"].tolist()
     assert unigrams == expected_tokens
+
+
+def test_list_files_tool_known_answer_11():
+    session = SessionState()
+    tools = make_tools(session)
+    list_files_tool = next(t for t in tools if t.name == "list_files_tool")
+
+    result = list_files_tool.invoke({"subdirectory": "newdataset"})
+
+    assert result["directories"] == []
+    assert result["files"] == ["Reddit-stock-sentiment.csv"]
