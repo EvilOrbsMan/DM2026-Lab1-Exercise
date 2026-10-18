@@ -1,6 +1,7 @@
 import os
 from typing import Dict, Any
 import nltk
+import pandas as pd
 from langchain_core.tools import tool
 
 # Ensure punkt tokenizer models are available
@@ -109,4 +110,43 @@ def make_tools(session):
         session.store_result("list_files_tool", {"subdirectory": subdirectory}, summary)
         return summary
 
-    return [tokenize_tool, list_files_tool]
+    @tool
+    def check_missing_tool() -> Dict[str, Any]:
+        """Checks session.dataframe for missing or empty text values as part of data quality check.
+
+        Typically used after loading dataset (load_dataset_tool) and before establishing document-term matrix
+        (build_dtm_tool) to verify data quality. Standard pandas isnull()/isna() only catches NaNs/Nones, missing
+        whitespace-only or empty strings. This tool catches both NaN/None and empty/whitespace text entries without
+        modifying or deleting rows.
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, n_documents, missing_count, valid_count,
+            and missing_indices (capped at 20 indices).
+        """
+        if session.dataframe is None or "text" not in session.dataframe.columns:
+            return {"error": "No dataframe loaded or 'text' column missing. Load a dataset first."}
+
+        df = session.dataframe
+        text_col = df["text"]
+
+        # Standard NaN/None check combined with empty/whitespace string check
+        is_missing_mask = text_col.isna() | (text_col.astype(str).str.strip() == "")
+
+        missing_indices = df.index[is_missing_mask].tolist()
+        missing_count = len(missing_indices)
+        n_documents = len(df)
+        valid_count = n_documents - missing_count
+
+        result_id = session.next_result_id("check_missing")
+        summary = {
+            "result_id": result_id,
+            "n_documents": n_documents,
+            "missing_count": missing_count,
+            "valid_count": valid_count,
+            "missing_indices": missing_indices[:20],
+        }
+
+        session.store_result("check_missing_tool", {}, summary)
+        return summary
+
+    return [tokenize_tool, list_files_tool, check_missing_tool]

@@ -63,3 +63,32 @@ def test_list_files_tool_known_answer_11():
 
     assert result["directories"] == []
     assert result["files"] == ["Reddit-stock-sentiment.csv"]
+
+
+def test_check_missing_tool_known_answer_2():
+    # Fresh session so dataset state is clean
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    # Load fixture CSV
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    # Get check_missing_tool bound to the SAME session
+    tools = make_tools(session)
+    check_missing_tool = next(t for t in tools if t.name == "check_missing_tool")
+
+    summary = check_missing_tool.invoke({})
+
+    # TEST_FIXTURE.md #2 known answer assertions
+    assert "result_id" in summary
+    assert summary["n_documents"] == 8
+    assert summary["missing_count"] == 1
+    assert summary["valid_count"] == 7
+    assert summary["missing_indices"] == [7]
