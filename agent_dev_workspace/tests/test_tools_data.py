@@ -92,3 +92,57 @@ def test_check_missing_tool_known_answer_2():
     assert summary["missing_count"] == 1
     assert summary["valid_count"] == 7
     assert summary["missing_indices"] == [7]
+
+
+def test_check_duplicates_tool_known_answer_3_no_drop():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    tools = make_tools(session)
+    check_duplicates_tool = next(t for t in tools if t.name == "check_duplicates_tool")
+
+    summary = check_duplicates_tool.invoke({"drop": False})
+
+    assert "result_id" in summary
+    assert summary["n_documents_before"] == 8
+    assert summary["duplicate_count"] == 1
+    assert summary["rows_deleted"] == 0
+    assert summary["n_documents_after"] == 8
+    assert summary["duplicate_indices"] == [5, 6]
+    assert len(session.dataframe) == 8
+
+
+def test_check_duplicates_tool_known_answer_3_with_drop():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    tools = make_tools(session)
+    check_duplicates_tool = next(t for t in tools if t.name == "check_duplicates_tool")
+
+    summary = check_duplicates_tool.invoke({"drop": True})
+
+    assert "result_id" in summary
+    assert summary["n_documents_before"] == 8
+    assert summary["duplicate_count"] == 1
+    assert summary["rows_deleted"] == 2
+    assert summary["n_documents_after"] == 6
+    assert summary["duplicate_indices"] == [5, 6]
+    assert len(session.dataframe) == 6
