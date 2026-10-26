@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import issparse
 from langchain_core.tools import tool
+from helpers.feature_filtering import pearson_filter
 
 
 def make_tools(session):
@@ -79,4 +80,77 @@ def make_tools(session):
         )
         return summary
 
-    return [variance_filter_tool]
+    @tool
+    def pearson_filter_tool(
+        target_class: str, threshold: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Calculates Pearson correlation between term counts and a binary one-vs-rest target class indicator.
+
+        Does not overwrite session.feature_matrix or session.feature_names. Stores the full list of kept
+        terms in session.artifacts['kept_terms_pearson'] and passes full_report (DataFrame with columns
+        feature, pearson_r, and pearson_p sorted by |pearson_r| descending) to session.store_result.
+
+        Args:
+            target_class (str): Target category for one-vs-rest correlation calculation.
+            threshold (Optional[float]): Absolute correlation threshold cutoff. When specified, terms with
+                |pearson_r| > threshold are kept. Defaults to None (all terms kept).
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, target_class, threshold, n_terms_initial,
+            n_terms_kept, n_terms_removed, kept_terms (capped at 20), and removed_terms (capped at 20).
+        """
+        if session.feature_matrix is None or session.feature_names is None:
+            return {"error": "No document-term matrix available. Run build_dtm_tool first."}
+
+        if session.labels is None:
+            return {"error": "No document labels available. Run build_dtm_tool first."}
+
+        if target_class not in session.categories:
+            return {
+                "error": f"Target class '{target_class}' not found in categories. Valid categories are: {session.categories}"
+            }
+
+        # Build one-vs-rest binary indicator vector
+        y_binary = (np.asarray(session.labels) == target_class).astype(int)
+
+        # Call helper to get full report DataFrame sorted by |pearson_r| descending
+        report_df = pearson_filter(
+            session.feature_matrix, y_binary, session.feature_names
+        )
+
+        # Determine kept vs removed terms based on threshold condition (|pearson_r| > threshold)
+        if threshold is None:
+            kept_df = report_df
+            removed_df = report_df.iloc[0:0]
+        else:
+            kept_df = report_df[report_df["pearson_r"].abs() > threshold]
+            removed_df = report_df[report_df["pearson_r"].abs() <= threshold]
+
+        kept_terms = kept_df["feature"].tolist()
+        removed_terms = removed_df["feature"].tolist()
+
+        # Store full kept terms list in artifacts
+        session.artifacts["kept_terms_pearson"] = kept_terms
+
+        result_id = session.next_result_id("pearson_filter")
+        summary = {
+            "result_id": result_id,
+            "target_class": target_class,
+            "threshold": threshold,
+            "n_terms_initial": len(session.feature_names),
+            "n_terms_kept": len(kept_terms),
+            "n_terms_removed": len(removed_terms),
+            "kept_terms": kept_terms[:20],
+            "removed_terms": removed_terms[:20],
+        }
+
+        # Store result with full_report
+        session.store_result(
+            "pearson_filter_tool",
+            {"target_class": target_class, "threshold": threshold},
+            summary,
+            full_report=report_df,
+        )
+        return summary
+
+    return [variance_filter_tool, pearson_filter_tool]
