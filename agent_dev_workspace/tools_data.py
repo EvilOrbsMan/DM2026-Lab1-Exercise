@@ -1,7 +1,8 @@
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
 import nltk
 import pandas as pd
+import numpy as np
 from langchain_core.tools import tool
 
 # Ensure punkt tokenizer models are available
@@ -108,6 +109,88 @@ def make_tools(session):
         }
 
         session.store_result("list_files_tool", {"subdirectory": subdirectory}, summary)
+        return summary
+
+    @tool
+    def inspect_data_tool(
+        n_rows: int = 5, mode: Literal["head", "tail"] = "head"
+    ) -> Dict[str, Any]:
+        """Peeks at session.dataframe without modifying it or rendering a plot.
+
+        Returns structural metadata (shape, columns, dtypes, category counts) and a preview of rows
+        with string values truncated to 200 characters and list values capped at 20 items.
+
+        Args:
+            n_rows (int): Number of rows to inspect (default 5, capped at max 20).
+            mode (Literal["head", "tail"]): Whether to inspect from top ("head") or bottom ("tail").
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, shape, columns, dtypes,
+            category_counts, n_rows_returned, and preview_rows list.
+        """
+        if session.dataframe is None:
+            return {"error": "No dataframe loaded. Load a dataset first."}
+
+        if n_rows < 1:
+            return {"error": "n_rows must be at least 1."}
+
+        if mode not in ["head", "tail"]:
+            return {"error": "mode must be either 'head' or 'tail'."}
+
+        # Clamp n_rows to max 20
+        actual_n_rows = min(n_rows, 20)
+
+        df = session.dataframe
+        if mode == "head":
+            df_slice = df.head(actual_n_rows)
+        else:
+            df_slice = df.tail(actual_n_rows)
+
+        # Build category counts as dict with native python ints
+        category_counts = {}
+        if "category_name" in df.columns:
+            raw_counts = df["category_name"].value_counts().to_dict()
+            category_counts = {str(k): int(v) for k, v in raw_counts.items()}
+
+        preview_rows = []
+        for _, row in df_slice.iterrows():
+            row_dict = {}
+            for col in df.columns:
+                val = row[col]
+
+                if isinstance(val, list):
+                    processed_val = val[:20]
+                elif pd.isna(val):
+                    processed_val = None
+                elif isinstance(val, str):
+                    processed_val = val[:200] + "..." if len(val) > 200 else val
+                elif isinstance(val, (np.integer, np.int64, np.int32)):
+                    processed_val = int(val)
+                elif isinstance(val, (np.floating, np.float64, np.float32)):
+                    processed_val = float(val) if not np.isnan(val) else None
+                else:
+                    processed_val = val
+
+                row_dict[col] = processed_val
+            preview_rows.append(row_dict)
+
+        result_id = session.next_result_id("inspect_data")
+        summary = {
+            "result_id": result_id,
+            "shape": [int(df.shape[0]), int(df.shape[1])],
+            "columns": list(df.columns),
+            "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+            "category_counts": category_counts,
+            "n_rows_returned": len(preview_rows),
+            "preview_rows": preview_rows,
+        }
+
+        session.store_result(
+            "inspect_data_tool",
+            {"n_rows": n_rows, "mode": mode},
+            summary,
+            full_report=df_slice,
+        )
         return summary
 
     @tool
@@ -234,4 +317,10 @@ def make_tools(session):
         )
         return summary
 
-    return [tokenize_tool, list_files_tool, check_missing_tool, check_duplicates_tool]
+    return [
+        tokenize_tool,
+        list_files_tool,
+        inspect_data_tool,
+        check_missing_tool,
+        check_duplicates_tool,
+    ]

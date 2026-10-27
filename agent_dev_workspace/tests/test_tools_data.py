@@ -146,3 +146,105 @@ def test_check_duplicates_tool_known_answer_3_with_drop():
     assert summary["n_documents_after"] == 6
     assert summary["duplicate_indices"] == [5, 6]
     assert len(session.dataframe) == 6
+
+
+def test_inspect_data_tool_default_head():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    tools = make_tools(session)
+    inspect_data_tool = next(t for t in tools if t.name == "inspect_data_tool")
+
+    summary = inspect_data_tool.invoke({"n_rows": 5, "mode": "head"})
+
+    assert "result_id" in summary
+    assert summary["shape"][0] == 8
+    assert "text" in summary["columns"]
+    assert "category_name" in summary["columns"]
+    assert summary["n_rows_returned"] == 5
+    assert summary["category_counts"] == {"catA": 4, "catB": 4}
+
+    preview = summary["preview_rows"]
+    assert preview[0]["text"] == "always alpha alpha alpha beta"
+    assert preview[0]["category_name"] == "catA"
+
+
+def test_inspect_data_tool_tail():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    tools = make_tools(session)
+    inspect_data_tool = next(t for t in tools if t.name == "inspect_data_tool")
+
+    summary = inspect_data_tool.invoke({"n_rows": 2, "mode": "tail"})
+
+    assert summary["n_rows_returned"] == 2
+    preview = summary["preview_rows"]
+    assert preview[0]["text"] == "always gamma delta"
+    assert preview[0]["category_name"] == "catB"
+    assert preview[1]["category_name"] == "catA"
+    assert preview[1]["text"] is None or preview[1]["text"] == ""
+
+
+def test_inspect_data_tool_clamping():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    tools = make_tools(session)
+    inspect_data_tool = next(t for t in tools if t.name == "inspect_data_tool")
+
+    summary = inspect_data_tool.invoke({"n_rows": 50})
+
+    assert "error" not in summary
+    assert summary["n_rows_returned"] == 8
+
+
+def test_inspect_data_tool_error_cases():
+    # Fresh session before loading dataset
+    session = SessionState()
+    tools = make_tools(session)
+    inspect_data_tool = next(t for t in tools if t.name == "inspect_data_tool")
+
+    summary_no_df = inspect_data_tool.invoke({})
+    assert "error" in summary_no_df
+
+    # Load dataset to test invalid n_rows
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    summary_invalid_rows = inspect_data_tool.invoke({"n_rows": 0})
+    assert "error" in summary_invalid_rows
