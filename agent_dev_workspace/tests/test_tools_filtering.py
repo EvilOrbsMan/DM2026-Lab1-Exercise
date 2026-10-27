@@ -138,3 +138,125 @@ def test_pearson_filter_tool_invalid_category():
 
     result = pearson_filter_tool.invoke({"target_class": "catC"})
     assert "error" in result
+
+
+def test_spearman_filter_tool_known_answer_6():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    filtering_tools = make_filtering_tools(session)
+    spearman_filter_tool = next(t for t in filtering_tools if t.name == "spearman_filter_tool")
+
+    summary = spearman_filter_tool.invoke({"target_class": "catB"})
+
+    assert summary["total_features"] == 5
+    assert summary["n_evaluated"] == 5
+
+    # Check top_features against TEST_FIXTURE #6 Spearman r values
+    expected_mapping = {
+        "delta": 1.0000,
+        "gamma": 0.9363,
+        "beta": -0.7746,
+        "alpha": -0.7500,
+        "always": 0.3780,
+    }
+
+    top_features = summary["top_features"]
+    assert len(top_features) == 5
+
+    for rec in top_features:
+        feat = rec["feature"]
+        assert feat in expected_mapping
+        assert rec["spearman_r"] == pytest.approx(expected_mapping[feat], abs=1e-4)
+
+    # Check top_positive and top_negative partitions
+    pos_features = [rec["feature"] for rec in summary["top_positive"]]
+    neg_features = [rec["feature"] for rec in summary["top_negative"]]
+
+    assert set(pos_features) == {"delta", "gamma", "always"}
+    assert set(neg_features) == {"beta", "alpha"}
+
+    # Test with threshold = 0.5
+    summary_thresh = spearman_filter_tool.invoke({"target_class": "catB", "threshold": 0.5})
+    assert summary_thresh["kept_count"] == 4
+
+
+def test_spearman_filter_tool_max_terms():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    filtering_tools = make_filtering_tools(session)
+    spearman_filter_tool = next(t for t in filtering_tools if t.name == "spearman_filter_tool")
+
+    summary = spearman_filter_tool.invoke({"target_class": "catB", "max_terms": 2})
+
+    assert summary["n_evaluated"] == 2
+    top_features = summary["top_features"]
+    assert len(top_features) == 2
+    # Pre-filtered top 2 terms by variance are alpha (1.1875) and gamma (1.109375)
+    # Sorted by |spearman_r| descending: gamma (~0.9363) then alpha (~-0.75)
+    assert top_features[0]["feature"] == "gamma"
+    assert top_features[0]["spearman_r"] == pytest.approx(0.9363, abs=1e-4)
+    assert top_features[1]["feature"] == "alpha"
+    assert top_features[1]["spearman_r"] == pytest.approx(-0.7500, abs=1e-4)
+
+
+def test_spearman_filter_tool_error_handling():
+    # Error when called with invalid target class
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    filtering_tools = make_filtering_tools(session)
+    spearman_filter_tool = next(t for t in filtering_tools if t.name == "spearman_filter_tool")
+
+    result_invalid_class = spearman_filter_tool.invoke({"target_class": "catC"})
+    assert "error" in result_invalid_class
+
+    # Error when called on uninitialized SessionState before DTM creation
+    session_no_dtm = SessionState()
+    filtering_tools_no_dtm = make_filtering_tools(session_no_dtm)
+    spearman_filter_tool_no_dtm = next(
+        t for t in filtering_tools_no_dtm if t.name == "spearman_filter_tool"
+    )
+
+    result_no_dtm = spearman_filter_tool_no_dtm.invoke({"target_class": "catB"})
+    assert "error" in result_no_dtm

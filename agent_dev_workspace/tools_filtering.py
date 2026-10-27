@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from scipy.sparse import issparse
 from langchain_core.tools import tool
-from helpers.feature_filtering import pearson_filter
+from helpers.feature_filtering import pearson_filter, spearman_filter
 
 
 def make_tools(session):
@@ -153,4 +153,106 @@ def make_tools(session):
         )
         return summary
 
-    return [variance_filter_tool, pearson_filter_tool]
+    @tool
+    def spearman_filter_tool(
+        target_class: str,
+        threshold: Optional[float] = None,
+        top_n: int = 20,
+        max_terms: int = 1500,
+    ) -> Dict[str, Any]:
+        """Calculates Spearman rank correlation between term counts and a binary one-vs-rest target class indicator.
+
+        Does not overwrite session.feature_matrix or session.feature_names. Stores full report DataFrame
+        in session.artifacts[f'spearman_{target_class}'] and passes full_report to session.store_result.
+
+        Args:
+            target_class (str): Target category for one-vs-rest rank correlation calculation.
+            threshold (Optional[float]): Optional absolute correlation threshold cutoff (|spearman_r| > threshold).
+            top_n (int): Number of top ranked features to include in top_features, top_positive, and top_negative lists (default 20).
+            max_terms (int): Pre-filtering maximum vocabulary size threshold (default 1500).
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, target_class, threshold, total_features,
+            n_evaluated, top_features, top_positive, top_negative, and optional kept_count / kept_terms.
+        """
+        if session.feature_matrix is None or session.feature_names is None:
+            return {"error": "No document-term matrix available. Run build_dtm_tool first."}
+
+        if session.labels is None:
+            return {"error": "No document labels available. Run build_dtm_tool first."}
+
+        labels_list = list(session.labels) if hasattr(session.labels, "tolist") else list(session.labels)
+        if target_class not in session.categories and target_class not in labels_list:
+            return {
+                "error": f"Target class '{target_class}' not found in categories. Valid categories are: {session.categories}"
+            }
+
+        if top_n < 1:
+            return {"error": "top_n must be at least 1."}
+
+        if max_terms < 1:
+            return {"error": "max_terms must be at least 1."}
+
+        # Build one-vs-rest binary target vector
+        y_binary = (np.asarray(session.labels) == target_class).astype(int)
+
+        # Call helper function
+        report_df = spearman_filter(
+            session.feature_matrix, y_binary, session.feature_names, max_terms=max_terms
+        )
+
+        # Store in artifacts
+        session.artifacts[f"spearman_{target_class}"] = report_df
+
+        # Format records helpers with native Python floats/ints
+        def format_records(df_slice: pd.DataFrame) -> List[Dict[str, Any]]:
+            records = []
+            for _, r in df_slice.iterrows():
+                records.append(
+                    {
+                        "feature": str(r["feature"]),
+                        "spearman_r": float(r["spearman_r"]),
+                        "spearman_p": float(r["spearman_p"]),
+                    }
+                )
+            return records
+
+        top_features = format_records(report_df.head(top_n))
+
+        pos_df = report_df[report_df["spearman_r"] > 0]
+        top_positive = format_records(pos_df.head(top_n))
+
+        neg_df = report_df[report_df["spearman_r"] < 0]
+        top_negative = format_records(neg_df.head(top_n))
+
+        result_id = session.next_result_id("spearman_filter")
+        summary: Dict[str, Any] = {
+            "result_id": result_id,
+            "target_class": target_class,
+            "threshold": threshold,
+            "total_features": int(len(session.feature_names)),
+            "n_evaluated": int(len(report_df)),
+            "top_features": top_features,
+            "top_positive": top_positive,
+            "top_negative": top_negative,
+        }
+
+        if threshold is not None:
+            kept_df = report_df[report_df["spearman_r"].abs() > threshold]
+            summary["kept_count"] = int(len(kept_df))
+            summary["kept_terms"] = [str(f) for f in kept_df["feature"].tolist()[:20]]
+
+        session.store_result(
+            "spearman_filter_tool",
+            {
+                "target_class": target_class,
+                "threshold": threshold,
+                "top_n": top_n,
+                "max_terms": max_terms,
+            },
+            summary,
+            full_report=report_df,
+        )
+        return summary
+
+    return [variance_filter_tool, pearson_filter_tool, spearman_filter_tool]
