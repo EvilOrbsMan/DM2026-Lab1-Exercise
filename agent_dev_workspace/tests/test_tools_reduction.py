@@ -252,3 +252,57 @@ def test_reduce_dimensions_error_handling():
     # Error when n_components < 2
     res_n_comp = reduce_dimensions_tool.invoke({"method": "pca", "n_components": 1})
     assert "error" in res_n_comp
+
+
+def test_binarize_labels_tool_sample_fixture():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    # Verify original session.labels prior to binarize_labels_tool
+    expected_original_labels = ["catA", "catA", "catA", "catB", "catB", "catB", "catB", "catA"]
+    assert list(session.labels) == expected_original_labels
+
+    reduction_tools = make_reduction_tools(session)
+    binarize_labels_tool = next(t for t in reduction_tools if t.name == "binarize_labels_tool")
+
+    summary = binarize_labels_tool.invoke({})
+
+    # Assert shape, classes, preview, and dataframe bin_category
+    assert "result_id" in summary
+    assert summary["shape"] == [8, 2]
+    assert summary["classes"] == ["catA", "catB"]
+
+    expected_preview = [[1, 0], [1, 0], [1, 0], [0, 1], [0, 1], [0, 1], [0, 1], [1, 0]]
+    assert summary["preview"] == expected_preview
+    assert session.dataframe["bin_category"].iloc[0] == [1, 0]
+
+    # Verify session.labels remains untouched
+    assert list(session.labels) == expected_original_labels
+
+    # Verify artifacts
+    assert "binarized_labels" in session.artifacts
+    assert isinstance(session.artifacts["binarized_labels"], np.ndarray)
+    assert session.artifacts["binarized_labels"].shape == (8, 2)
+    assert "label_binarizer" in session.artifacts
+
+
+def test_binarize_labels_tool_error_handling():
+    session = SessionState()
+    reduction_tools = make_reduction_tools(session)
+    binarize_labels_tool = next(t for t in reduction_tools if t.name == "binarize_labels_tool")
+
+    summary = binarize_labels_tool.invoke({})
+    assert "error" in summary

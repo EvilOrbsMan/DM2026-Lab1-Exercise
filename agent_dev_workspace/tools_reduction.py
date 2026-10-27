@@ -4,6 +4,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+from sklearn.preprocessing import LabelBinarizer
 from langchain_core.tools import tool
 
 
@@ -144,4 +145,56 @@ def make_tools(session):
 
         return summary
 
-    return [reduce_dimensions_tool]
+    @tool
+    def binarize_labels_tool() -> Dict[str, Any]:
+        """One-hot encodes category labels in session.dataframe using sklearn LabelBinarizer.
+
+        Converts string labels from session.dataframe['category_name'] into a binary one-hot matrix.
+        Note: When there are exactly 2 classes, LabelBinarizer outputs a single 1D column (0/1); this tool
+        intentionally expands binary 2-class outputs into a full (N, 2) matrix ([1, 0] for class 0, [0, 1] for class 1).
+
+        Updates session.dataframe['bin_category'], session.artifacts['binarized_labels'], and session.artifacts['label_binarizer'].
+        Leaves session.labels untouched so downstream tools relying on 1D category labels continue to work.
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, shape, classes, and preview (capped at first 20 rows).
+        """
+        if session.dataframe is None or "category_name" not in session.dataframe.columns:
+            return {"error": "No dataframe loaded or 'category_name' column missing. Load a dataset first."}
+
+        cat_series = session.dataframe["category_name"]
+        lb = LabelBinarizer()
+        Y = lb.fit_transform(cat_series)
+
+        # Expand binary output (N, 1) to (N, 2) one-hot matrix if 2 classes
+        if len(lb.classes_) == 2 and Y.shape[1] == 1:
+            Y = np.hstack([1 - Y, Y])
+
+        classes_list = [str(c) for c in lb.classes_]
+
+        # Update session state (dataframe list column, raw numpy artifacts)
+        session.dataframe["bin_category"] = Y.tolist()
+        session.artifacts["binarized_labels"] = Y
+        session.artifacts["label_binarizer"] = lb
+
+        # Build full_report DataFrame for results store
+        report_df = pd.DataFrame(Y, columns=classes_list)
+
+        result_id = session.next_result_id("binarize_labels")
+        summary = {
+            "result_id": result_id,
+            "shape": [int(Y.shape[0]), int(Y.shape[1])],
+            "classes": classes_list,
+            "preview": Y[:20].tolist(),
+        }
+
+        session.store_result(
+            "binarize_labels_tool",
+            {},
+            summary,
+            full_report=report_df,
+        )
+
+        return summary
+
+    return [reduce_dimensions_tool, binarize_labels_tool]
