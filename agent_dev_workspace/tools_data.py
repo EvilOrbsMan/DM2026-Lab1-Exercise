@@ -317,10 +317,84 @@ def make_tools(session):
         )
         return summary
 
+    @tool
+    def sample_data_tool(
+        n: int, random_state: Optional[int] = 42
+    ) -> Dict[str, Any]:
+        """Subsamples session.dataframe without resetting row indices.
+
+        Overwrites session.dataframe with the sampled DataFrame. Stores full sampled indices in
+        session.artifacts['sampled_indices'] and caps sampled_indices in summary at 20 items.
+
+        Args:
+            n (int): Number of rows to sample.
+            random_state (Optional[int]): Random seed for reproducible sampling (default 42).
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, n_before, n_after, random_state,
+            sampled_indices (capped at max 20), category_counts (if present), and optional warning.
+        """
+        if session.dataframe is None:
+            return {"error": "No dataframe loaded. Load a dataset first."}
+
+        n_before = len(session.dataframe)
+
+        if n < 1:
+            return {"error": "n must be at least 1."}
+
+        if n > n_before:
+            return {"error": f"n ({n}) cannot exceed dataframe length ({n_before})."}
+
+        sampled_df = session.dataframe.sample(n=n, random_state=random_state)
+        session.dataframe = sampled_df
+
+        sampled_indices = [int(idx) for idx in sampled_df.index.tolist()]
+        session.artifacts["sampled_indices"] = sampled_indices
+
+        warning_msg = None
+        if (
+            "unigrams" in sampled_df.columns
+            or session.feature_matrix is not None
+            or "count_vectorizer" in session.artifacts
+        ):
+            warning_msg = (
+                "Subsampled session.dataframe after tokenization or DTM creation. "
+                "Existing downstream attributes/artifacts (e.g. unigrams, feature_matrix, count_vectorizer) "
+                "are now out of sync with session.dataframe. Re-run tokenize_tool / build_dtm_tool."
+            )
+
+        category_counts = {}
+        if "category_name" in sampled_df.columns:
+            raw_counts = sampled_df["category_name"].value_counts().to_dict()
+            category_counts = {str(k): int(v) for k, v in raw_counts.items()}
+
+        result_id = session.next_result_id("sample_data")
+        summary: Dict[str, Any] = {
+            "result_id": result_id,
+            "n_before": n_before,
+            "n_after": len(sampled_df),
+            "random_state": random_state,
+            "sampled_indices": sampled_indices[:20],
+        }
+        if category_counts:
+            summary["category_counts"] = category_counts
+
+        if warning_msg:
+            summary["warning"] = warning_msg
+
+        session.store_result(
+            "sample_data_tool",
+            {"n": n, "random_state": random_state},
+            summary,
+            full_report=sampled_df,
+        )
+        return summary
+
     return [
         tokenize_tool,
         list_files_tool,
         inspect_data_tool,
         check_missing_tool,
         check_duplicates_tool,
+        sample_data_tool,
     ]

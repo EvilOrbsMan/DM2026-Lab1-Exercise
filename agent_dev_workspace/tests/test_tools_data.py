@@ -3,6 +3,7 @@ import pytest
 from agent_pipeline.session_state import SessionState
 from agent_pipeline.workspace_loader import load_workspace_tools
 from tools_data import make_tools
+from tools_dtm import make_tools as make_dtm_tools
 
 
 def test_tokenize_tool_known_answer_10():
@@ -248,3 +249,84 @@ def test_inspect_data_tool_error_cases():
 
     summary_invalid_rows = inspect_data_tool.invoke({"n_rows": 0})
     assert "error" in summary_invalid_rows
+
+
+def test_sample_data_tool_known_answer_13():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    tools = make_tools(session)
+    sample_data_tool = next(t for t in tools if t.name == "sample_data_tool")
+
+    summary = sample_data_tool.invoke({"n": 4, "random_state": 42})
+
+    # Known answer #13 asserts sampled_indices == [1, 5, 0, 7]
+    assert "result_id" in summary
+    assert summary["n_before"] == 8
+    assert summary["n_after"] == 4
+    assert summary["sampled_indices"] == [1, 5, 0, 7]
+    assert session.dataframe.index.tolist() == [1, 5, 0, 7]
+    assert len(session.dataframe) == 4
+    assert summary["category_counts"] == {"catA": 3, "catB": 1}
+    assert "warning" not in summary
+
+
+def test_sample_data_tool_warning_after_dtm():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    tools = make_tools(session)
+    sample_data_tool = next(t for t in tools if t.name == "sample_data_tool")
+
+    summary = sample_data_tool.invoke({"n": 4, "random_state": 42})
+
+    assert "warning" in summary
+
+
+def test_sample_data_tool_error_cases():
+    # Error when called on uninitialized session
+    session = SessionState()
+    tools = make_tools(session)
+    sample_data_tool = next(t for t in tools if t.name == "sample_data_tool")
+
+    summary_no_df = sample_data_tool.invoke({"n": 4})
+    assert "error" in summary_no_df
+
+    # Load dataset to test invalid n values
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    summary_zero = sample_data_tool.invoke({"n": 0})
+    assert "error" in summary_zero
+
+    summary_exceed = sample_data_tool.invoke({"n": 9})
+    assert "error" in summary_exceed
