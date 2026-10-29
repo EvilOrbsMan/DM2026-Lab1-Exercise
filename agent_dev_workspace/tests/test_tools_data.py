@@ -330,3 +330,78 @@ def test_sample_data_tool_error_cases():
 
     summary_exceed = sample_data_tool.invoke({"n": 9})
     assert "error" in summary_exceed
+
+
+def test_describe_data_tool_known_answer_18():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    tools = make_tools(session)
+    describe_data_tool = next(t for t in tools if t.name == "describe_data_tool")
+
+    summary = describe_data_tool.invoke({})
+
+    # Verify return dict basic structure
+    assert "result_id" in summary
+    assert summary["n_documents"] == 8
+
+    # Check text_length column in session.dataframe
+    expected_lengths = [29, 23, 17, 30, 24, 18, 18, 0]
+    assert session.dataframe["text_length"].tolist() == expected_lengths
+
+    # Overall stats assertions against known answer #18
+    overall = summary["overall_stats"]
+    assert overall["count"] == 8.0
+    assert overall["mean"] == pytest.approx(19.875)
+    assert overall["std"] == pytest.approx(9.4330, abs=1e-3)
+    assert overall["min"] == 0.0
+    assert overall["25%"] == pytest.approx(17.75)
+    assert overall["50%"] == pytest.approx(20.5)
+    assert overall["75%"] == pytest.approx(25.25)
+    assert overall["max"] == 30.0
+
+    # Per-category stats assertions against known answer #18
+    cat_stats = summary["per_category_stats"]
+    assert "catA" in cat_stats
+    assert "catB" in cat_stats
+
+    catA = cat_stats["catA"]
+    assert catA["count"] == 4.0
+    assert catA["mean"] == pytest.approx(17.25)
+    assert catA["std"] == pytest.approx(12.5, abs=1e-3)
+    assert catA["min"] == 0.0
+    assert catA["25%"] == pytest.approx(12.75)
+    assert catA["50%"] == pytest.approx(20.0)
+    assert catA["75%"] == pytest.approx(24.5)
+    assert catA["max"] == 29.0
+
+    catB = cat_stats["catB"]
+    assert catB["count"] == 4.0
+    assert catB["mean"] == pytest.approx(22.5)
+    assert catB["std"] == pytest.approx(5.7446, abs=1e-3)
+    assert catB["min"] == 18.0
+    assert catB["25%"] == pytest.approx(18.0)
+    assert catB["50%"] == pytest.approx(21.0)
+    assert catB["75%"] == pytest.approx(25.5)
+    assert catB["max"] == 30.0
+
+    # Verify boxplot figure set on session.pending_figure
+    assert session.pending_figure is not None
+
+
+def test_describe_data_tool_uninitialized_error():
+    session = SessionState()
+    tools = make_tools(session)
+    describe_data_tool = next(t for t in tools if t.name == "describe_data_tool")
+
+    summary = describe_data_tool.invoke({})
+    assert "error" in summary

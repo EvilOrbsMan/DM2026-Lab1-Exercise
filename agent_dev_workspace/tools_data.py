@@ -3,6 +3,8 @@ from typing import Dict, Any, List, Optional, Literal
 import nltk
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 from langchain_core.tools import tool
 
 # Ensure punkt tokenizer models are available
@@ -390,6 +392,65 @@ def make_tools(session):
         )
         return summary
 
+    @tool
+    def describe_data_tool() -> Dict[str, Any]:
+        """Computes summary statistics on text character lengths and generates a boxplot per category.
+
+        Requires session.dataframe to be populated with 'text' and 'category_name' columns.
+        Assigns computed character lengths to session.dataframe['text_length'].
+        Computes standard descriptive statistics (count, mean, std, min, 25%, 50%, 75%, max) overall
+        and grouped by category_name. Sets a boxplot figure on session.pending_figure.
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, n_documents, overall_stats,
+            and per_category_stats.
+        """
+        if session.dataframe is None or "text" not in session.dataframe.columns or "category_name" not in session.dataframe.columns:
+            return {"error": "session.dataframe must be loaded and contain 'text' and 'category_name' columns."}
+
+        df = session.dataframe
+
+        # Compute character length safely handling NaNs
+        df["text_length"] = df["text"].fillna("").astype(str).apply(len)
+
+        def parse_stats(series: pd.Series) -> Dict[str, Optional[float]]:
+            desc = series.describe()
+            stats = {}
+            for stat_key in ["count", "mean", "std", "min", "25%", "50%", "75%", "max"]:
+                val = desc.get(stat_key)
+                if val is None or pd.isna(val):
+                    stats[stat_key] = None
+                else:
+                    stats[stat_key] = float(val)
+            return stats
+
+        overall_stats = parse_stats(df["text_length"])
+
+        per_category_stats = {}
+        for category, group in df.groupby("category_name"):
+            per_category_stats[str(category)] = parse_stats(group["text_length"])
+
+        # Create boxplot figure
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.boxplot(data=df, x="category_name", y="text_length", ax=ax)
+        ax.set_title("Text Length Distribution by Category")
+        ax.set_xlabel("Category Name")
+        ax.set_ylabel("Text Length (characters)")
+        plt.tight_layout()
+
+        session.pending_figure = fig
+
+        result_id = session.next_result_id("describe_data")
+        summary = {
+            "result_id": result_id,
+            "n_documents": len(df),
+            "overall_stats": overall_stats,
+            "per_category_stats": per_category_stats,
+        }
+
+        session.store_result("describe_data_tool", {}, summary)
+        return summary
+
     return [
         tokenize_tool,
         list_files_tool,
@@ -397,4 +458,5 @@ def make_tools(session):
         check_missing_tool,
         check_duplicates_tool,
         sample_data_tool,
+        describe_data_tool,
     ]
