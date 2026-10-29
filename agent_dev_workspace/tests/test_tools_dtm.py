@@ -173,3 +173,118 @@ def test_term_frequency_tool_error_cases():
 
     summary_invalid_top_n = term_frequency_tool.invoke({"top_n": 0})
     assert "error" in summary_invalid_top_n
+
+
+def test_dtm_heatmap_tool_known_answer_21_default():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    dtm_heatmap_tool = next(t for t in dtm_tools if t.name == "dtm_heatmap_tool")
+    summary = dtm_heatmap_tool.invoke({})
+
+    # TEST_FIXTURE #21 assertions
+    assert summary["shape"] == [8, 5]
+    assert summary["capped"] is False
+    assert summary["terms"] == ["alpha", "always", "beta", "delta", "gamma"]
+
+    expected_matrix = [
+        [3, 1, 1, 0, 0],
+        [2, 1, 1, 0, 0],
+        [1, 1, 1, 0, 0],
+        [0, 1, 0, 1, 3],
+        [0, 1, 0, 1, 2],
+        [0, 1, 0, 1, 1],
+        [0, 1, 0, 1, 1],
+        [0, 0, 0, 0, 0],
+    ]
+    assert summary["matrix"] == expected_matrix
+    assert session.pending_figure is not None
+
+
+def test_dtm_heatmap_tool_positional_slice():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    dtm_heatmap_tool = next(t for t in dtm_tools if t.name == "dtm_heatmap_tool")
+    summary = dtm_heatmap_tool.invoke({"n_terms": 2, "n_documents": 3})
+
+    assert summary["shape"] == [3, 2]
+    assert summary["terms"] == ["alpha", "always"]
+    assert summary["matrix"] == [[3, 1], [2, 1], [1, 1]]
+
+
+def test_dtm_heatmap_tool_capping_behavior():
+    session = SessionState()
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    dtm_tools = make_dtm_tools(session)
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    dtm_heatmap_tool = next(t for t in dtm_tools if t.name == "dtm_heatmap_tool")
+    summary = dtm_heatmap_tool.invoke({"n_terms": 100})
+
+    assert summary["capped"] is True
+    assert summary["shape"] == [8, 5]
+
+
+def test_dtm_heatmap_tool_error_cases():
+    session = SessionState()
+    dtm_tools = make_dtm_tools(session)
+    dtm_heatmap_tool = next(t for t in dtm_tools if t.name == "dtm_heatmap_tool")
+
+    # Uninitialized feature_matrix error
+    summary_no_dtm = dtm_heatmap_tool.invoke({})
+    assert "error" in summary_no_dtm
+
+    # Load dataset & build DTM to test n_terms=0 error
+    premade_tools, _ = load_workspace_tools("premade_tools", session)
+    load_dataset_tool = next(t for t in premade_tools if t.name == "load_dataset_tool")
+    load_dataset_tool.invoke(
+        {
+            "file_path": "agent_dev/sample_fixture.csv",
+            "text_column": "text",
+            "label_column": "label",
+        }
+    )
+
+    build_dtm_tool = next(t for t in dtm_tools if t.name == "build_dtm_tool")
+    build_dtm_tool.invoke({})
+
+    summary_invalid = dtm_heatmap_tool.invoke({"n_terms": 0})
+    assert "error" in summary_invalid

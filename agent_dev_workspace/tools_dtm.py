@@ -1,6 +1,8 @@
 from typing import Dict, Any, List, Optional
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy.sparse import issparse
 from sklearn.feature_extraction.text import CountVectorizer
 from langchain_core.tools import tool
@@ -154,4 +156,93 @@ def make_tools(session):
         )
         return summary
 
-    return [build_dtm_tool, term_frequency_tool]
+    @tool
+    def dtm_heatmap_tool(n_terms: int = 20, n_documents: int = 20) -> Dict[str, Any]:
+        """Plots and returns a heatmap slice of the raw document-term matrix (DTM).
+
+        Takes a positional slice of session.feature_matrix and session.feature_names without sorting
+        or filtering. Max cap is 50 for both n_terms and n_documents. If the available matrix has fewer
+        terms or documents than requested, all available rows and columns are included.
+
+        Args:
+            n_terms (int): Number of terms (columns) from the start of feature_names to include (max 50, default 20).
+            n_documents (int): Number of documents (rows) from the start of feature_matrix to include (max 50, default 20).
+
+        Returns:
+            Dict[str, Any]: Summary dictionary containing result_id, matrix slice, terms, document indices,
+            category labels (if available), shape, and capped flag if clamped to 50.
+        """
+        if session.feature_matrix is None or session.feature_names is None:
+            return {"error": "No document-term matrix available. Run build_dtm_tool first."}
+
+        if n_terms < 1 or n_documents < 1:
+            return {"error": "n_terms and n_documents must both be at least 1."}
+
+        capped = False
+        if n_terms > 50:
+            n_terms = 50
+            capped = True
+        if n_documents > 50:
+            n_documents = 50
+            capped = True
+
+        dtm = session.feature_matrix
+        feature_names = session.feature_names
+
+        # Take raw positional slice without sorting or filtering
+        sliced_dtm = dtm[:n_documents, :n_terms]
+        sliced_terms = feature_names[:n_terms]
+
+        if issparse(sliced_dtm):
+            dense_matrix = sliced_dtm.toarray()
+        else:
+            dense_matrix = np.asarray(sliced_dtm)
+
+        # Convert to dense 2D list of plain Python numbers
+        matrix_list = [[int(val) if isinstance(val, (int, np.integer)) else float(val) for val in row] for row in dense_matrix]
+
+        doc_indices = list(range(dense_matrix.shape[0]))
+
+        labels = None
+        if session.labels is not None:
+            labels = [str(lbl) for lbl in session.labels[:n_documents]]
+        elif session.dataframe is not None and "category_name" in session.dataframe.columns:
+            labels = [str(lbl) for lbl in session.dataframe["category_name"].iloc[:n_documents]]
+
+        # Generate plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        sns.heatmap(
+            dense_matrix,
+            annot=True,
+            fmt="d" if np.issubdtype(dense_matrix.dtype, np.integer) else "g",
+            xticklabels=sliced_terms,
+            yticklabels=labels if labels is not None else doc_indices,
+            cmap="Blues",
+            ax=ax,
+        )
+        ax.set_title(f"Document-Term Matrix Heatmap (First {len(sliced_terms)} terms x {dense_matrix.shape[0]} docs)")
+        ax.set_xlabel("Terms")
+        ax.set_ylabel("Documents")
+        plt.tight_layout()
+
+        session.pending_figure = fig
+
+        result_id = session.next_result_id("dtm_heatmap")
+        summary = {
+            "result_id": result_id,
+            "matrix": matrix_list,
+            "terms": sliced_terms,
+            "documents": doc_indices,
+            "labels": labels,
+            "shape": list(dense_matrix.shape),
+            "capped": capped,
+        }
+
+        session.store_result(
+            "dtm_heatmap_tool",
+            {"n_terms": n_terms, "n_documents": n_documents},
+            summary,
+        )
+        return summary
+
+    return [build_dtm_tool, term_frequency_tool, dtm_heatmap_tool]
