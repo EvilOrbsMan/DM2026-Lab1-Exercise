@@ -1,5 +1,7 @@
 from typing import Dict, Any, List, Optional
 import numpy as np
+import pandas as pd
+from scipy.sparse import issparse
 from sklearn.feature_extraction.text import CountVectorizer
 from langchain_core.tools import tool
 
@@ -85,4 +87,71 @@ def make_tools(session):
         )
         return summary
 
-    return [build_dtm_tool]
+    @tool
+    def term_frequency_tool(top_n: int = 20) -> Dict[str, Any]:
+        """Calculates total term frequency across all documents in session.feature_matrix.
+
+        Requires session.feature_matrix and session.feature_names to be populated by build_dtm_tool.
+        Sums count per term across all documents, sorts terms by frequency descending (breaking ties
+        alphabetically by term name), and passes full report DataFrame (columns 'term' and 'frequency')
+        to session.store_result for visualization by visualize_result_tool.
+
+        Args:
+            top_n (int): Number of top terms to include in the summary output (default 20).
+
+        Returns:
+            Dict[str, Any]: Summary containing result_id, n_terms, total_count, and top_terms list/dict.
+        """
+        if session.feature_matrix is None or session.feature_names is None:
+            return {"error": "No document-term matrix available. Run build_dtm_tool first."}
+
+        if top_n < 1:
+            return {"error": "top_n must be at least 1."}
+
+        dtm = session.feature_matrix
+        feature_names = session.feature_names
+
+        # Sum frequencies across axis=0
+        if issparse(dtm):
+            counts = dtm.sum(axis=0).A1
+        else:
+            counts = np.sum(np.asarray(dtm), axis=0)
+
+        # Convert counts to plain Python numbers
+        counts = [int(c) for c in counts]
+
+        # Build full report DataFrame
+        report_df = pd.DataFrame(
+            {
+                "term": feature_names,
+                "frequency": counts,
+            }
+        )
+
+        # Sort descending by frequency, then ascending by term for tie-breaking
+        report_df = report_df.sort_values(
+            by=["frequency", "term"], ascending=[False, True]
+        ).reset_index(drop=True)
+
+        top_terms = [
+            {"term": str(r["term"]), "frequency": int(r["frequency"])}
+            for _, r in report_df.head(top_n).iterrows()
+        ]
+
+        result_id = session.next_result_id("term_frequency")
+        summary = {
+            "result_id": result_id,
+            "n_terms": len(feature_names),
+            "total_count": int(sum(counts)),
+            "top_terms": top_terms,
+        }
+
+        session.store_result(
+            "term_frequency_tool",
+            {"top_n": top_n},
+            summary,
+            full_report=report_df,
+        )
+        return summary
+
+    return [build_dtm_tool, term_frequency_tool]
